@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 from local.lib.drawlib import loadImageResource, loadFromHistory, saveSourceHistory
+from local.lib.windowing import SimpleWindow, breakByKeypress, arrowKeys
 
 # ---------------------------------------------------------------------------------------------------------------------
 #%% Define functions
@@ -21,6 +22,7 @@ closeall = cv2.destroyAllWindows
 # .....................................................................................................................
 
 def drawZone(displayFrame, zonePoints, lineColor, lineThickness, circleRadius=3, isClosed=True):
+    
     cv2.polylines(displayFrame, [zonePoints], isClosed, lineColor, lineThickness)
     for eachPoint in zonePoints:
         cv2.circle(displayFrame, tuple(eachPoint), circleRadius, lineColor, -1)
@@ -103,14 +105,36 @@ def mouseCallback(event, mx, my, flags, param):
     
     
     # .................................................................................................................
+    # Find which zone point is being hovered
+    
+    # Check for the closest point
+    minSqDist = 1E9
+    bestMatchIdx = -1
+    for zoneIdx, eachZone in enumerate(param["zoneList"]):            
+        for pointIdx, eachPoint in enumerate(eachZone):
+            
+            # Calculate the distance between mouse and point
+            distSq = np.sum(np.square(mxy - eachPoint))
+            
+            # Record the closest point
+            if distSq < minSqDist:
+                minSqDist = distSq
+                bestMatchIdx = (zoneIdx, pointIdx)
+
+    # Figure out if we need to change the point position
+    distanceThreshold = 50**2            
+    param["zonePointHover"] = bestMatchIdx if minSqDist < distanceThreshold else None
+    
+    
+    # .................................................................................................................
     # Add points with left click
     
     if event == cv2.EVENT_LBUTTONDOWN:
-        
+    
         # Add the clicked point to the list of new points
-        param["newPoints"].append(mxy)        
-        
-        
+        param["newPoints"].append(mxy)
+    
+    
     # .................................................................................................................
     # Clear zones with right-click
     
@@ -125,27 +149,11 @@ def mouseCallback(event, mx, my, flags, param):
     
     
     # .................................................................................................................
-    # Select nearest zone-points on middle-down
+    # Select nearest zone-point on middle-down
     
     if event == cv2.EVENT_MBUTTONDOWN and len(param["newPoints"]) == 0:
         
-        # Check for the closest point
-        minSqDist = 1E9
-        bestMatchIdx = -1
-        for zoneIdx, eachZone in enumerate(param["zoneList"]):            
-            for pointIdx, eachPoint in enumerate(eachZone):
-                
-                # Calculate the distance between mouse and point
-                distSq = np.sum(np.square(mxy - eachPoint))
-                
-                # Record the closest point
-                if distSq < minSqDist:
-                    minSqDist = distSq
-                    bestMatchIdx = (zoneIdx, pointIdx)
-
-        # Figure out if we need to change the point position
-        distanceThreshold = 50**2            
-        param["zonePointSelect"] = bestMatchIdx if minSqDist < distanceThreshold else None
+        param["zonePointSelect"] = param["zonePointHover"]
         
     
     # .................................................................................................................
@@ -241,6 +249,7 @@ cbData = {"mouse": (0, 0),
           "newPoints": [], 
           "zoneList": [], 
           "zonePointSelect": None,
+          "zonePointHover": None,
           "frameWH": np.array(scaledWH), 
           "borderWH": np.array((wBorder, hBorder))}
 
@@ -268,8 +277,14 @@ print("  - Complete zone drawing (if currently drawing)")
 print("  - Otherwise, drag/move points")
 print("  - Updated zone coordinates will be printed out on release")
 print("")
+print("Arrow keys:")
+print("  - Nudge points near to mouse cursor")
+print("")
+print("Spacebar:")
+print("  - Print out zone info for zone associated with nearest point")
+print("")
 print("Exiting:")
-print("  - Use q, Esc or spacebar to close the window")
+print("  - Use q or Esc to close the window")
 print("")
 print("----------------------------------------------------------------")
 print("----------------------------------------------------------------")
@@ -278,10 +293,9 @@ print("----------------------------------------------------------------")
 # ---------------------------------------------------------------------------------------------------------------------
 #%% Run video
 
-# Set up window
-setupWindow = "Draw Zones"
-cv2.namedWindow(setupWindow)
-cv2.setMouseCallback(setupWindow, mouseCallback, cbData)
+# Set up window display
+drawWindow = SimpleWindow("Draw Zones")
+drawWindow.addCallback(mouseCallback, cbData)
 
 while True:
     
@@ -334,17 +348,30 @@ while True:
     # .................................................................................................................
     # Display the frame
     
-    cv2.imshow(setupWindow, scaledFrame)        
+    winExists = drawWindow.imshow(scaledFrame)
+    if not winExists: break
     
     # .................................................................................................................
     # Get key press values
     
-    keyPress = cv2.waitKey(frameDelay) & 0xFF
-    if (keyPress == ord('q')) | (keyPress == 27) | (keyPress == 32):  # q, Esc or spacebar to close window
-        print("")
-        print("Key pressed to stop!")
-        break
-        
+    # Get keypress & close window if q/Esc are pressed
+    reqBreak, keyPress = breakByKeypress(frameDelay)
+    if reqBreak: break
+
+    # Nudge zone points with arrow keys 
+    arrowPressed, arrowXY = arrowKeys(keyPress)
+    if arrowPressed:
+        if cbData["zonePointHover"] is not None:
+            zoneHover, pointHover = cbData["zonePointHover"]
+            cbData["zoneList"][zoneHover][pointHover] += arrowXY
+            
+    
+    # Print out zone hovered if spacebar is pressed
+    if keyPress == 32:
+        if cbData["zonePointHover"] is not None:
+            zoneHover, pointHover = cbData["zonePointHover"]
+            zonePrintOut(cbData["zoneList"][zoneHover], cbData["frameWH"], cbData["borderWH"], updating=True)
+    
         
 # ---------------------------------------------------------------------------------------------------------------------
 #%% Clean up

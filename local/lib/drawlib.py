@@ -392,41 +392,42 @@ def rtspFromCommandLine(errorOut=True):
                  "command": rtspComm}
         
     return outRecord
-        
-# .....................................................................................................................
 
+# .....................................................................................................................
+    
 def rtspOrFileFromCommandLine():
     
     # Initialize all outputs to false
     isImage, isVideo, isRTSP = [False] * 3
     
-    # Try to get RTSP info
-    rtspRecord = rtspFromCommandLine(errorOut=False)
-    if rtspRecord is not None:
-        isRTSP = True
-        inputSource, blockIP = getRTSP(**rtspRecord)
-        return inputSource, isImage, isVideo, isRTSP
+    # Load a file by default
+    inputSource = guiLoad(windowTitle="Load video or image", errorOut=False)
     
-    # If RTSP skipped, try loading a file
-    print("**********************************************")
-    print("")
-    print("Cancelling RTSP! Loading file instead.")
-    try:
-        inputSource = guiLoad()
-    except IOError:
-        hardQuit()
+    # If a file is loaded, try to get the file type and name, otherwise, try and RTSP command line input
+    if inputSource is not None:
+        
+        # Figure out the file type to decide it this is a video or image
+        fileName, fileExt = os.path.splitext(inputSource)    
+        isImage = (fileExt.lower() in [".jpg", ".png", ".bmp"])
+        isVideo = (not isImage)
     
-    # Figure out the file type to decide it this is a video or image
-    fileName, fileExt = os.path.splitext(inputSource)    
-    isImage = (fileExt.lower() in [".jpg", ".png", ".bmp"])
-    isVideo = (not isImage)
+    else:
+        
+        # Try to get RTSP info
+        rtspRecord = rtspFromCommandLine(errorOut=False)
+        if rtspRecord is not None:
+            isRTSP = True
+            inputSource, blockIP = getRTSP(**rtspRecord)
+            
+        else:
+            print("")
+            print("Cancelled!")
+            hardQuit()
 
     return inputSource, isImage, isVideo, isRTSP
 
 # .....................................................................................................................
     
-
-
 
 
 # ---------------------------------------------------------------------------------------------------------------------

@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 from local.lib.drawlib import loadImageResource, loadFromHistory, saveSourceHistory, guiConfirm, guiSave
+from local.lib.windowing import SimpleWindow, breakByKeypress, arrowKeys
 
 # ---------------------------------------------------------------------------------------------------------------------
 #%% Define functions
@@ -90,6 +91,28 @@ def mouseCallback(event, mx, my, flags, param):
     mxy = np.array((mx, my))
     param["mouse"] = mxy
     
+    # .................................................................................................................
+    # Get point hovering
+        
+    if flags != (mouseMoveOffset + cv2.EVENT_FLAG_LBUTTON):
+        
+        # Check for the closest point
+        minSqDist = 1E9
+        bestMatchIdx = -1
+        for maskIdx, eachMask in enumerate(param["maskList"]):            
+            for pointIdx, eachPoint in enumerate(eachMask):
+                
+                # Calculate the distance between mouse and point
+                distSq = np.sum(np.square(mxy - eachPoint))
+                
+                # Record the closest point
+                if distSq < minSqDist:
+                    minSqDist = distSq
+                    bestMatchIdx = (maskIdx, pointIdx)
+
+        # Figure out if we need to change the point position
+        distanceThreshold = 50**2            
+        param["maskPointHover"] = bestMatchIdx if minSqDist < distanceThreshold else None
     
     # ..................................................................................................................
     # Add points with left click
@@ -114,27 +137,11 @@ def mouseCallback(event, mx, my, flags, param):
     
     
     # ..................................................................................................................
-    # Select nearest mask-points on middle-down
+    # Select nearest mask-point on middle-down
     
     if event == cv2.EVENT_MBUTTONDOWN and len(param["newPoints"]) == 0:
         
-        # Check for the closest point
-        minSqDist = 1E9
-        bestMatchIdx = -1
-        for maskIdx, eachMask in enumerate(param["maskList"]):            
-            for pointIdx, eachPoint in enumerate(eachMask):
-                
-                # Calculate the distance between mouse and point
-                distSq = np.sum(np.square(mxy - eachPoint))
-                
-                # Record the closest point
-                if distSq < minSqDist:
-                    minSqDist = distSq
-                    bestMatchIdx = (maskIdx, pointIdx)
-
-        # Figure out if we need to change the point position
-        distanceThreshold = 50**2            
-        param["maskPointSelect"] = bestMatchIdx if minSqDist < distanceThreshold else None
+        param["maskPointSelect"] = param["maskPointHover"]
         
     
     # ..................................................................................................................
@@ -227,6 +234,7 @@ cbData = {"mouse": (0, 0),
           "newPoints": [], 
           "maskList": [], 
           "maskPointSelect": None,
+          "maskPointHover": None,
           "frameWH": np.array(scaledWH), 
           "borderWH": np.array((wBorder, hBorder))}
 
@@ -251,6 +259,9 @@ print("Middle click:")
 print("  - Complete mask drawing (if currently drawing)")
 print("  - Otherwise, drag/move points")
 print("")
+print("Arrow keys:")
+print("  - Nudge points near to mouse cursor")
+print("")
 print("Keypress i:")
 print("  - Invert mask drawing")
 print("")
@@ -267,20 +278,24 @@ print("----------------------------------------------------------------")
 # ---------------------------------------------------------------------------------------------------------------------
 #%% Run video
 
-# Set up main window
-setupWindow = "Draw Mask"
-cv2.namedWindow(setupWindow)
-cv2.setMouseCallback(setupWindow, mouseCallback, cbData)
-
-# Set up masking window
-maskWindow = "Masked Image"
-cv2.namedWindow(maskWindow)
+# For convenience
+leftArrow, upArrow, rightArrow, downArrow = 81, 82, 83, 84
+arrowKeyList = [leftArrow, upArrow, rightArrow, downArrow]
 
 # Position windows
 leftSpacing = 100
 topSpacing = 150
-cv2.moveWindow(setupWindow, leftSpacing, topSpacing)
-cv2.moveWindow(maskWindow, leftSpacing + wBorder + scaledWH[0] + leftSpacing, int(topSpacing + hBorder/2))
+
+# Set up main window
+drawWindow = SimpleWindow("Draw Mask", 
+                          x = leftSpacing, 
+                          y = topSpacing)
+drawWindow.addCallback(mouseCallback, cbData)
+
+# Set up masking window
+maskWindow = SimpleWindow("Masked Image", 
+                          x = leftSpacing + wBorder + scaledWH[0] + leftSpacing,
+                          y = topSpacing + hBorder/2)
 
 while True:
     
@@ -305,12 +320,9 @@ while True:
     
     # .................................................................................................................
     # Resize the frame and add borders
-    
-    if scaledWH is not None:
-        # Resize the image to eventual output size
-        scaledFrame = cv2.resize(inFrame, dsize=scaledWH)
-    else:
-        scaledFrame = inFrame
+
+    # Resize the image to eventual output size
+    scaledFrame = cv2.resize(inFrame, dsize=scaledWH)
     
     # Add borders to the frame for drawing 'out-of-bounds'
     borderedFrame = cv2.copyMakeBorder(scaledFrame, 
@@ -338,23 +350,30 @@ while True:
     # Display
     
     # Show main drawing window
-    cv2.imshow(setupWindow, borderedFrame)
+    winExists = drawWindow.imshow(borderedFrame)
+    if not winExists: break
     
     # Include the original image if desired
     maskDisplayFrame = cv2.bitwise_and(scaledFrame, maskFrame) if maskWithImage else maskFrame.copy()
         
     # Show masked image
-    cv2.imshow(maskWindow, maskDisplayFrame)
+    winExists = maskWindow.imshow(maskDisplayFrame)
+    if not winExists: break
     
     
     # .................................................................................................................
     # Get key press values
     
-    keyPress = cv2.waitKey(frameDelay) & 0xFF
-    if (keyPress == ord('q')) | (keyPress == 27) | (keyPress == 32):  # q, Esc or spacebar to close window
-        print("")
-        print("Key pressed to stop!")
-        break
+    # Get keypress & close window if q/Esc are pressed
+    reqBreak, keyPress = breakByKeypress(frameDelay)
+    if reqBreak: break
+    
+    # Nudge mask points with arrow keys 
+    arrowPressed, arrowXY = arrowKeys(keyPress)
+    if arrowPressed:
+        if cbData["maskPointHover"] is not None:
+            maskHover, pointHover = cbData["maskPointHover"]
+            cbData["maskList"][maskHover][pointHover] += arrowXY
     
     # Invert mask colors when i is pressed
     if (keyPress == ord('i')) or (keyPress == ord('I')):

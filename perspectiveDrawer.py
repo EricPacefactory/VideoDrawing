@@ -11,7 +11,8 @@ import cv2
 import numpy as np
 
 from local.lib.drawlib import loadImageResource, loadFromHistory, saveSourceHistory
-
+from local.lib.windowing import SimpleWindow, breakByKeypress, arrowKeys
+    
 try:
     import cv.transform.perspective
     import cv.util.functions
@@ -29,7 +30,6 @@ except ImportError:
     # Crash to stop spyder without kernel restart or quit nicely if not using spyder...
     if any('SPYDER' in name for name in os.environ): raise SystemExit()
     quit()  # Works nicely everywhere else! 
-
 
 
 # Hacky 'global' definition of perspective variables...
@@ -170,8 +170,6 @@ def quadPrintOut(paramData):
     print("")
     print("\tNormalized values:")
     print("quad: ", normString)
-    
-    pass
 
 # .....................................................................................................................
 
@@ -356,7 +354,6 @@ print("")
 print("----------------------------------------------------------------")
 print("----------------------------------------------------------------")
 
-
 # ---------------------------------------------------------------------------------------------------------------------
 #%% Run video
 
@@ -369,41 +366,33 @@ gridSizes = [None, 100, 50, 20, 10, 5]
 gridIndex = 0
 
 # Set up main window
-setupWindow = "Draw Persp. Quadrilateral"
-cv2.namedWindow(setupWindow)
-cv2.setMouseCallback(setupWindow, mouseCallback, cbData)
+drawWindow = SimpleWindow("Draw Persp. Quadrilateral")
+drawWindow.addCallback(mouseCallback, cbData)
 
 # Set up masking window
-warpWindow = "Transformed Image"
-cv2.namedWindow(warpWindow)
+warpWindow = SimpleWindow("Transformed Image")
 
 # Set up trackbar control window
-controlWindow = "Controls"
-cv2.namedWindow(controlWindow)
-emptyControlImage = np.zeros((1, scaledWH[0], 3), dtype=np.uint8)
+controlWindow = SimpleWindow("Controls")
 
 # Set up trackbars
-noCB = lambda x: None
 xsRef = "xs"
 x1Ref, x2Ref = "x1", "x2"
 y1Ref, y2Ref = "y1", "y2"
-cv2.createTrackbar(xsRef, controlWindow, 100, 200, noCB)
-cv2.createTrackbar(x1Ref, controlWindow, 0, 100, noCB)
-cv2.createTrackbar(x2Ref, controlWindow, 0, 100, noCB)
-cv2.createTrackbar(y1Ref, controlWindow, 50, 100, noCB)
-cv2.createTrackbar(y2Ref, controlWindow, 50, 100, noCB)
-oldxs = -1
-oldx1, oldx2 = -1, -1
-oldy1, oldy2 = -1, -1
+controlWindow.addTrackbar(xsRef, 100, 200)
+controlWindow.addTrackbar(x1Ref, 0, 100)
+controlWindow.addTrackbar(x2Ref, 0, 100)
+controlWindow.addTrackbar(y1Ref, 50, 100)
+controlWindow.addTrackbar(y2Ref, 50, 100)
 prevpUpdate, currpUpdate = True, False
-cv2.imshow(controlWindow, emptyControlImage)
+controlWindow.imshow(np.zeros((1, scaledWH[0], 3), dtype=np.uint8))     # Use a blank image for the control window
 
 # Position windows
 leftSpacing = 100
 topSpacing = 150
-cv2.moveWindow(setupWindow, leftSpacing, topSpacing)
-cv2.moveWindow(warpWindow, leftSpacing + wBorder + scaledWH[0] + leftSpacing, topSpacing)
-cv2.moveWindow(controlWindow, leftSpacing + wBorder + scaledWH[0] + leftSpacing, int(topSpacing + targetWH[1] + 1*hBorder))
+drawWindow.move(x = leftSpacing, y = topSpacing)
+warpWindow.move(x = leftSpacing + wBorder + scaledWH[0] + leftSpacing, y = topSpacing)
+controlWindow.move(x = leftSpacing + wBorder + scaledWH[0] + leftSpacing, y = topSpacing + targetWH[1] + 1*hBorder)
 
 while True:
     
@@ -423,6 +412,7 @@ while True:
     
         # Restart the video if we get to the end
         if sourceType.video:
+            break
             videoObj.set(vc_pos_frames, 0)
             continue
     
@@ -456,33 +446,28 @@ while True:
     currpUpdate = False
     
     # Read track bar values
-    xsRead = cv2.getTrackbarPos(xsRef, controlWindow)
-    x1Read = cv2.getTrackbarPos(x1Ref, controlWindow)
-    x2Read = cv2.getTrackbarPos(x2Ref, controlWindow)
-    y1Read = cv2.getTrackbarPos(y1Ref, controlWindow)
-    y2Read = cv2.getTrackbarPos(y2Ref, controlWindow)
+    xsChanged, xsRead = controlWindow.readTrackbar(xsRef)
+    x1Changed, x1Read = controlWindow.readTrackbar(x1Ref)
+    x2Changed, x2Read = controlWindow.readTrackbar(x2Ref)
+    y1Changed, y1Read = controlWindow.readTrackbar(y1Ref)
+    y2Changed, y2Read = controlWindow.readTrackbar(y2Ref)
     
     # Update trackbars only when they change
-    if xsRead != oldxs:
+    if xsChanged:
         xs = xsRead/100
         updatePerspective(cbData, lowRes=True)
-        oldxs = xsRead
         currpUpdate = True
     
-    if x1Read != oldx1 or x2Read != oldx2:
+    if x1Changed or x2Changed: #x1Read != oldx1 or x2Read != oldx2:
         x1 = x1Read/100
         x2 = x2Read/100
         updatePerspective(cbData, lowRes=True)
-        oldx1 = x1Read
-        oldx2 = x2Read
         currpUpdate = True
     
-    if y1Read != oldy1 or y2Read != oldy2:
+    if y1Changed or y2Changed:# y1Read != oldy1 or y2Read != oldy2:
         y1 = min(max(0.01, y1Read/100), 0.99)
         y2 = min(max(0.01, y2Read/100), 0.99)
         updatePerspective(cbData, lowRes=True)
-        oldy1 = y1Read
-        oldy2 = y2Read
         currpUpdate = True
     
     # .................................................................................................................
@@ -516,20 +501,19 @@ while True:
     # Display
     
     # Show main drawing window
-    cv2.imshow(setupWindow, borderedFrame)
+    winExists = drawWindow.imshow(borderedFrame)
+    if not winExists: break
     
     # Show perspective transformed image
-    cv2.imshow(warpWindow, warpPadFrame)
-    
+    winExists = warpWindow.imshow(warpPadFrame)
+    if not winExists: break 
     
     # .................................................................................................................
     # Get key press values
     
-    keyPress = cv2.waitKey(frameDelay) & 0xFF
-    if (keyPress == ord('q')) | (keyPress == 27):  # q, Esc to close window
-        print("")
-        print("Key pressed to stop!")
-        break
+    # Get keypress & close window if q/Esc are pressed
+    reqBreak, keyPress = breakByKeypress(frameDelay)
+    if reqBreak: break
     
     # Print out quad info when p is press
     if (keyPress == ord('p')) or (keyPress == ord('P')):
@@ -553,15 +537,13 @@ while True:
         currpUpdate = True
         
     # Allow for small adjustments using the arrow keys (adjust last modified point)
-    if keyPress in arrowKeyList:  
+    arrowPressed, arrowXY = arrowKeys(keyPress)
+    if arrowPressed:
         pointHover = cbData["pointHover"]
-        if pointHover is not None: 
-            xnudge = (keyPress == rightArrow) - (keyPress == leftArrow)
-            ynudge = (keyPress == downArrow) - (keyPress == upArrow)
-            cbData["quadPoints"][pointHover] += np.array((xnudge,ynudge)) 
+        if pointHover is not None:
+            cbData["quadPoints"][pointHover] += arrowXY
             updatePerspective(cbData, lowRes=True)
             currpUpdate = True
-            
             
     # Perform high quality perspective update when we're done changing the trackbars/arrow keys
     if prevpUpdate and not currpUpdate:

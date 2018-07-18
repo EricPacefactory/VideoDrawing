@@ -12,6 +12,7 @@ import numpy as np
 from collections import namedtuple
 
 from local.lib.drawlib import loadImageResource, loadFromHistory, saveSourceHistory
+from local.lib.windowing import SimpleWindow, breakByKeypress, arrowKeys
 
 # ---------------------------------------------------------------------------------------------------------------------
 #%% Define functions
@@ -19,12 +20,49 @@ from local.lib.drawlib import loadImageResource, loadFromHistory, saveSourceHist
 # Convenience for closing OCV windows interactively
 closeall = cv2.destroyAllWindows
 
+
+# .....................................................................................................................
+
+def drawTriangles(displayFrame, startPoint, endPoint, color, size):
+    
+    # Create template triangle
+    halfSize = int(size/2)
+    halfStep = np.array((halfSize, 0))
+    triPoints = np.array([-halfStep,
+                          halfStep,
+                          [0, size]])
+    
+    # Find line vector and length, used to figure out how to rotate the triangles
+    lineVec = endPoint - startPoint
+    lineLen = np.linalg.norm(lineVec)
+    
+    # Don't draw lines that have no length!
+    if lineLen > 0:
+        
+        # Get half-step vector, used to offset triangle locations on line (so tris don't 'overhang' the line)
+        halfStep = np.array((halfSize, 0))
+        
+        # Get rotation matrix used to rotate triangle points to match line orientation
+        cosA, sinA = (lineVec/lineLen)*np.array((1, -1))    # Need to flip y-values, since y-axis is inverted
+        rotMatrix = np.array([[cosA, -sinA], [sinA, cosA]])
+        
+        # Rotate and translate start/end triangles to proper positions
+        startTri = np.dot(triPoints + halfStep, rotMatrix)
+        endTri = np.dot(triPoints - halfStep, rotMatrix)
+        rotStartTri = np.int32(startPoint + startTri)
+        rotEndTri = np.int32(endPoint + endTri)
+        
+        # Draw triangles
+        cv2.fillPoly(displayFrame, [rotStartTri], color)
+        cv2.fillPoly(displayFrame, [rotEndTri], color)
+
 # .....................................................................................................................
 
 def drawLine(displayFrame, lineStart, lineEnd, lineColor, lineThickness, circleRadius):
     cv2.line(displayFrame, tuple(lineStart), tuple(lineEnd), lineColor, lineThickness)
-    cv2.circle(displayFrame, tuple(lineStart), circleRadius, lineColor, -1)
-    cv2.circle(displayFrame, tuple(lineEnd), circleRadius, lineColor, -1)
+    drawTriangles(displayFrame, lineStart, lineEnd, lineColor, 12)
+    #cv2.circle(displayFrame, tuple(lineStart), circleRadius, lineColor, -1)
+    #cv2.circle(displayFrame, tuple(lineEnd), circleRadius, lineColor, -1)
     
 # .....................................................................................................................
 
@@ -104,7 +142,34 @@ def mouseCallback(event, mx, my, flags, param):
     mxy = np.array((mx, my))
     param["mouse"] = mxy
     
-    
+    # .................................................................................................................
+    # Get point hovering
+        
+    if flags != (mouseMoveOffset + cv2.EVENT_FLAG_LBUTTON):
+        
+        # Get a list of all points
+        allStartPoints = [eachLine.start for eachLine in param["lineList"]]
+        allEndPoints = [eachLine.end for eachLine in param["lineList"]]
+        allPoints = allStartPoints + allEndPoints
+        
+        # Check for the closest point
+        minSqDist = 1E9
+        bestMatchIdx = -1        
+        for idx, eachPoint in enumerate(allPoints):
+            
+            # Calculate the distance between mouse and point
+            distSq = np.sum(np.square(mxy - eachPoint))
+            
+            # Record the closest point
+            if distSq < minSqDist:
+                minSqDist = distSq
+                bestMatchIdx = idx
+        
+        # Figure out if we need to change the point position
+        distanceThreshold = 50**2            
+        param["pointHover"] = bestMatchIdx if minSqDist < distanceThreshold else None
+        
+                
     # ..................................................................................................................
     # Add object lines with left click
     
@@ -263,6 +328,8 @@ cbData = {"mouse": (0, 0),
           "newPoints": [], 
           "lineList": [], 
           "pointSelect": None,
+          "pointHover": None,
+          "lineHover": None,
           "frameWH": np.array(scaledWH), 
           "borderWH": np.array((wBorder, hBorder))}
 
@@ -289,6 +356,12 @@ print("Middle click:")
 print("  - Drag/move points")
 print("  - Updated line coordinates will be printed out on release")
 print("")
+print("Arrow keys:")
+print("  - Nudge points near to mouse cursor")
+print("")
+print("Spacebar:")
+print("  - Print out zone info for zone associated with nearest point")
+print("")
 print("Exiting:")
 print("  - Use q, Esc or spacebar to close the window")
 print("")
@@ -299,10 +372,10 @@ print("----------------------------------------------------------------")
 # ---------------------------------------------------------------------------------------------------------------------
 #%% Run video
 
-# Set up window
-setupWindow = "Draw Lines"
-cv2.namedWindow(setupWindow)
-cv2.setMouseCallback(setupWindow, mouseCallback, cbData)
+# Set up window display
+drawWindow = SimpleWindow("Draw Lines")
+drawWindow.addCallback(mouseCallback, cbData)
+
 
 while True:
     
@@ -348,6 +421,15 @@ while True:
     # .................................................................................................................
     # Draw lines
     
+    '''
+    lineHover = cbData["lineHover"]
+    if lineHover is not None:
+        pt1 = cbData["lineList"][lineHover].start
+        pt2 = cbData["lineList"][lineHover].end
+        cv2.line(scaledFrame, tuple(pt1), tuple(pt2), (0,0,0), 5)
+        drawTriangles(scaledFrame, pt1, pt2, (0,0,0), 25)
+    '''
+    
     drawAllLines(scaledFrame, cbData["lineList"], 
                  lineColor=(255, 0, 255), lineThickness=2, circleRadius=5)
     
@@ -358,17 +440,44 @@ while True:
     # .................................................................................................................
     # Display the frame
     
-    cv2.imshow(setupWindow, scaledFrame)        
-    
+    winExists = drawWindow.imshow(scaledFrame)
+    if not winExists: break    
     
     # .................................................................................................................
     # Get key press values
     
-    keyPress = cv2.waitKey(frameDelay) & 0xFF
-    if (keyPress == ord('q')) | (keyPress == 27) | (keyPress == 32):  # q, Esc or spacebar to close window
-        print("")
-        print("Key pressed to stop!")
-        break
+    # Get keypress & close window if q/Esc are pressed
+    reqBreak, keyPress = breakByKeypress(frameDelay)
+    if reqBreak: break
+    
+    # Allow for small adjustments using the arrow keys (adjust last modified point)
+    arrowPressed, arrowXY = arrowKeys(keyPress)
+    if arrowPressed:  
+        pointHover = cbData["pointHover"]
+        if pointHover is not None: 
+            
+            listLength = len(cbData["lineList"])
+            lineIdx = pointHover % listLength
+            
+            if pointHover >= listLength:
+                newxy = cbData["lineList"][lineIdx].end + arrowXY
+            else:
+                newxy = cbData["lineList"][lineIdx].start + arrowXY
+        
+            # Get the new start/end point so we can overwrite the previous line object
+            newStart, newEnd, newVec, lineIdx = getUpdatedLine(cbData["lineList"], pointHover, newxy)
+
+            # Create new line object and replace the old line
+            newLine = SimpleLine(start=newStart, end=newEnd, vec=newVec)
+            cbData["lineList"][lineIdx] = newLine
+            
+    # Print out line hovered if spacebar is pressed
+    if keyPress == 32:
+        if cbData["pointHover"] is not None:
+            pointHover = cbData["pointHover"]
+            lineIdx = pointHover % len(cbData["lineList"])
+            lineRef = cbData["lineList"][lineIdx]
+            linePrintOut(lineRef.start, lineRef.end, cbData["frameWH"], cbData["borderWH"], updating=True)
         
         
 # ---------------------------------------------------------------------------------------------------------------------
